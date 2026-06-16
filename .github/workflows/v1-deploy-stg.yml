@@ -10,7 +10,7 @@ on:
     branches:
       - stg
     paths:
-      - 'force-app/**'
+      - "force-app/**"
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +34,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
           cache: npm
 
       - name: Install Salesforce CLI
@@ -46,6 +46,10 @@ jobs:
           sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias stg-org
           rm ./auth-url.txt
 
+      - name: Install fflib packages
+        run: |
+          sf package install --package 04t3i000002i8mw --target-org stg-org --wait 10 --no-prompt
+          sf package install --package 04t3i000002i8lw --target-org stg-org --wait 10 --no-prompt
       # ── Validate first (check-only) ────────────────────────────────────────
       - name: Validate metadata (check-only)
         run: |
