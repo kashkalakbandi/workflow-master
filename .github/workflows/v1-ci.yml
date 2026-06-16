@@ -1,0 +1,120 @@
+name: v1 | CI — Feature Branch Validation
+
+# Runs on every PR raised from a feature branch toward stg.
+# Purpose: fast feedback before anything touches a shared org.
+# No org deployment here — just code quality and scratch org tests.
+
+on:
+  pull_request:
+    branches:
+      - stg
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+
+jobs:
+  # ── 1. PMD Static Analysis ──────────────────────────────────────────────────
+  pmd-scan:
+    name: PMD Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download PMD
+        run: |
+          PMD_VERSION="7.3.0"
+          curl -sSL "https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip" \
+            -o pmd.zip
+          unzip -q pmd.zip
+          echo "PMD_HOME=$(pwd)/pmd-bin-${PMD_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Run PMD
+        run: |
+          "$PMD_HOME/bin/pmd" check \
+            --dir force-app/main/default/classes \
+            --rulesets category/apex/bestpractices.xml,category/apex/errorprone.xml,category/apex/security.xml,category/apex/performance.xml \
+            --format text \
+            --minimum-priority 3 \
+            --report-file pmd-report.txt || true
+
+      - name: Display results
+        run: cat pmd-report.txt 2>/dev/null || echo "No violations found."
+
+      - name: Upload PMD report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmd-report
+          path: pmd-report.txt
+          retention-days: 7
+
+  # ── 2. Scratch Org — Deploy & Test ─────────────────────────────────────────
+  scratch-org-test:
+    name: Scratch Org — Deploy & Test
+    runs-on: ubuntu-latest
+    # Only run if PMD scan job completed (pass or fail — we still want test results)
+    needs: pmd-scan
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli@latest
+
+      - name: Authenticate to DevHub
+        run: |
+          echo "${{ secrets.SFDX_AUTH_URL }}" > ./auth-url.txt
+          sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias devhub --set-default-dev-hub
+          rm ./auth-url.txt
+
+      - name: Create scratch org
+        run: |
+          sf org create scratch \
+            --definition-file config/project-scratch-def.json \
+            --alias ci-scratch \
+            --duration-days 1 \
+            --no-namespace \
+            --set-default
+
+      - name: Deploy source
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org ci-scratch \
+            --wait 20
+
+      - name: Run Apex tests
+        run: |
+          sf apex run test \
+            --target-org ci-scratch \
+            --test-level RunLocalTests \
+            --output-dir ./test-results \
+            --result-format junit \
+            --wait 20
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-apex-test-results
+          path: test-results/
+          retention-days: 7
+
+      - name: Delete scratch org
+        if: always()
+        run: sf org delete scratch --target-org ci-scratch --no-prompt

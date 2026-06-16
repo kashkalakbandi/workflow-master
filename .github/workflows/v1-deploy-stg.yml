@@ -1,0 +1,160 @@
+name: v1 | Deploy — Staging
+
+# Triggered when a PR is merged into stg (i.e. push to stg after merge).
+# After a successful deploy, automatically raises a PR from stg → preprod
+# with auto-merge enabled. The PR merges as soon as preprod's required
+# checks pass (configured in branch protection rules).
+
+on:
+  push:
+    branches:
+      - stg
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-stg
+  cancel-in-progress: false
+
+jobs:
+  deploy-stg:
+    name: Deploy to Staging Org
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Need full history so gh CLI can create a proper PR
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli@latest
+
+      - name: Authenticate to Staging Org
+        run: |
+          echo "${{ secrets.SFDX_STG_AUTH_URL }}" > ./auth-url.txt
+          sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias stg-org
+          rm ./auth-url.txt
+
+      # ── Validate first (check-only) ────────────────────────────────────────
+      - name: Validate metadata (check-only)
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org stg-org \
+            --dry-run \
+            --wait 20
+
+      # ── Actual deploy ──────────────────────────────────────────────────────
+      - name: Deploy to Staging
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org stg-org \
+            --wait 30
+
+      # ── Run smoke tests ────────────────────────────────────────────────────
+      - name: Run Apex tests on Staging
+        run: |
+          sf apex run test \
+            --target-org stg-org \
+            --class-names LoanApplicationServiceTest \
+            --output-dir ./stg-test-results \
+            --result-format junit \
+            --wait 20
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stg-test-results
+          path: stg-test-results/
+          retention-days: 14
+
+      # ── Write step summary ─────────────────────────────────────────────────
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## Staging Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Triggered by | ${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Auto-promote: raise PR stg → preprod ───────────────────────────────────
+  # This job only runs if deploy-stg succeeded.
+  # It creates a PR from stg → preprod and enables auto-merge so the PR
+  # merges automatically once preprod's branch protection checks pass.
+  raise-preprod-pr:
+    name: Auto-raise PR — stg to preprod
+    runs-on: ubuntu-latest
+    needs: deploy-stg
+    # Only promote on actual pushes to stg, not manual dispatches
+    if: github.event_name == 'push'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create PR from stg to preprod
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if a PR already exists to avoid duplicates
+          EXISTING=$(gh pr list --base preprod --head stg --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already exists — skipping creation."
+            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+          else
+            PR_URL=$(gh pr create \
+              --base preprod \
+              --head stg \
+              --title "chore: promote stg → preprod (${{ github.sha }})" \
+              --body "$(cat <<'EOF'
+          ## Automated Promotion: stg → preprod
+
+          This PR was automatically raised after a successful staging deployment.
+
+          | Item | Value |
+          |------|-------|
+          | Triggered by | ${{ github.actor }} |
+          | Staging commit | ${{ github.sha }} |
+          | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+          **Auto-merge is enabled.** This PR will merge automatically once all required
+          status checks on `preprod` pass. To block the promotion, close this PR or
+          disable auto-merge.
+          EOF
+            )")
+            echo "Created PR: $PR_URL"
+            PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enable auto-merge on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge ${{ steps.create-pr.outputs.pr_number }} \
+            --auto \
+            --merge \
+            --subject "chore: auto-merge stg → preprod"

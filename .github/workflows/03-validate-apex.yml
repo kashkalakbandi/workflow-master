@@ -1,0 +1,60 @@
+name: 03 - Validate Apex (PMD Static Analysis)
+
+# Runs on every PR targeting main, and can be triggered manually.
+# Teaches: job dependencies, artifact upload/download, reusable steps.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+
+jobs:
+  pmd-scan:
+    name: PMD Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java (required by PMD)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download PMD
+        run: |
+          PMD_VERSION="7.3.0"
+          curl -sSL "https://github.com/pmd/pmd/releases/download/pmd_releases/${PMD_VERSION}/pmd-dist-${PMD_VERSION}-bin.zip" \
+            -o pmd.zip
+          unzip -q pmd.zip
+          echo "PMD_HOME=$(pwd)/pmd-bin-${PMD_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Run PMD on Apex classes
+        run: |
+          "$PMD_HOME/bin/pmd" check \
+            --dir force-app/main/default/classes \
+            --rulesets category/apex/bestpractices.xml,category/apex/errorprone.xml,category/apex/security.xml,category/apex/performance.xml \
+            --format text \
+            --minimum-priority 3 \
+            --report-file pmd-report.txt || true
+
+      - name: Display PMD results
+        run: |
+          if [ -f pmd-report.txt ]; then
+            cat pmd-report.txt
+          else
+            echo "No PMD violations found."
+          fi
+
+      - name: Upload PMD report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmd-report
+          path: pmd-report.txt
+          retention-days: 14
