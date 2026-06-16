@@ -1,0 +1,126 @@
+name: v1 | Deploy — Production
+
+# Triggered only when preprod is manually merged into main.
+# Two-phase deploy: check-only validation first, then actual deploy.
+# Has a manual environment gate AND a confirmation input for extra safety.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: 'Type DEPLOY to confirm production deployment'
+        required: true
+        default: ''
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  # ── Guard: only allow workflow_dispatch if the word DEPLOY was typed ────────
+  # For push events (the actual merge), this job auto-passes.
+  preflight:
+    name: Preflight Check
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+
+    steps:
+      - name: Evaluate gate
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Merge to main — always proceed
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Push event — proceeding."
+          elif [ "${{ inputs.confirm_deploy }}" = "DEPLOY" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger confirmed — proceeding."
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Manual trigger requires confirm_deploy = DEPLOY"
+            exit 1
+          fi
+
+  # ── Production Deploy ───────────────────────────────────────────────────────
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.proceed == 'true'
+    environment:
+      name: production
+      # Settings → Environments → production
+      # Add required reviewers here — this is the human approval gate.
+      # The workflow pauses until an approver clicks Approve in the GitHub UI.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli@latest
+
+      - name: Authenticate to Production Org
+        run: |
+          echo "${{ secrets.SFDX_PROD_AUTH_URL }}" > ./auth-url.txt
+          sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias prod-org
+          rm ./auth-url.txt
+
+      # Phase 1: validate without deploying
+      - name: Validate metadata — check-only
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org prod-org \
+            --dry-run \
+            --wait 30
+
+      # Phase 2: deploy only after check-only passed
+      - name: Deploy to Production
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org prod-org \
+            --wait 60
+
+      # Salesforce requires 75% code coverage — RunLocalTests enforces this
+      - name: Run full Apex test suite
+        run: |
+          sf apex run test \
+            --target-org prod-org \
+            --test-level RunLocalTests \
+            --output-dir ./prod-test-results \
+            --result-format junit \
+            --wait 60
+
+      - name: Upload production test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prod-test-results
+          path: prod-test-results/
+          retention-days: 90
+
+      - name: Production deployment summary
+        if: always()
+        run: |
+          echo "## Production Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Deployed by | ${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | ${{ github.ref_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |" >> "$GITHUB_STEP_SUMMARY"
