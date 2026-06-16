@@ -1,0 +1,92 @@
+name: 04 - Deploy to Scratch Org & Run Tests
+
+# Full CI pipeline: validates metadata + Apex against a real scratch org.
+# Teaches: secrets, environment variables, SFDX/SF CLI, job outputs, status checks.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+
+env:
+  SFDX_CLI_VERSION: latest
+  # Store SFDX_AUTH_URL as a GitHub Secret: Settings → Secrets → SFDX_AUTH_URL
+  # Generate with: sf org display --verbose --json | jq '.result.sfdxAuthUrl'
+
+jobs:
+  validate-and-test:
+    name: Deploy & Test on Scratch Org
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # ─── Tooling ──────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli@${{ env.SFDX_CLI_VERSION }}
+
+      - name: Verify SF CLI version
+        run: sf --version
+
+      # ─── Org Auth ─────────────────────────────────────────────────────────
+      - name: Authenticate to DevHub
+        run: |
+          echo "${{ secrets.SFDX_AUTH_URL }}" > ./auth-url.txt
+          sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias devhub --set-default-dev-hub
+          rm ./auth-url.txt
+
+      # ─── Scratch Org ──────────────────────────────────────────────────────
+      - name: Create scratch org
+        run: |
+          sf org create scratch \
+            --definition-file config/project-scratch-def.json \
+            --alias ci-scratch \
+            --duration-days 1 \
+            --no-namespace \
+            --set-default
+
+      # ─── Deploy ───────────────────────────────────────────────────────────
+      - name: Deploy source to scratch org
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org ci-scratch \
+            --wait 20
+
+      # ─── Test ─────────────────────────────────────────────────────────────
+      - name: Run Apex tests
+        run: |
+          sf apex run test \
+            --target-org ci-scratch \
+            --test-level RunLocalTests \
+            --output-dir ./test-results \
+            --result-format junit \
+            --wait 20
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apex-test-results
+          path: test-results/
+          retention-days: 14
+
+      # ─── Cleanup ──────────────────────────────────────────────────────────
+      - name: Delete scratch org
+        if: always()
+        run: sf org delete scratch --target-org ci-scratch --no-prompt
