@@ -20,4 +20,12 @@ public interface ILoanApplications extends fflib_ISObjectDomain {
      *              using Base_Interest_Rate__c as the default rate.
      */
     void applyInterestRateFromConfig();
+
+    /**
+     * @description Validates Requested_Amount__c against the maximum loan amount
+     *              defined in Loan_Configuration__mdt for the application's loan type.
+     *              Adds a field error on Requested_Amount__c when the amount exceeds
+     *              the configured maximum.
+     */
+    void validateLoanAmount();
 }

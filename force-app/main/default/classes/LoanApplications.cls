@@ -33,6 +33,7 @@ public with sharing class LoanApplications
      */
     public override void onValidate() {
         validateCreditScore();
+        validateLoanAmount();
         applyInterestRateFromConfig();
     }
 
@@ -87,6 +88,38 @@ public with sharing class LoanApplications
             }
             if (config.Base_Interest_Rate__c != null) {
                 app.Annual_Interest_Rate__c = config.Base_Interest_Rate__c;
+            }
+        }
+    }
+
+    /**
+     * @description Validates each application's Requested_Amount__c against the
+     *              maximum loan amount configured in Loan_Configuration__mdt.
+     *              Adds a field-level error on Requested_Amount__c when the amount
+     *              exceeds the maximum for the application's loan type.
+     */
+    public void validateLoanAmount() {
+        Map<String, Loan_Configuration__mdt> configByLoanType = getLoanConfigMap();
+        for (Loan_Application__c app : (List<Loan_Application__c>) Records) {
+            if (String.isBlank(app.Loan_Type__c)) {
+                continue;
+            }
+            Loan_Configuration__mdt config = configByLoanType.get(app.Loan_Type__c);
+            if (config == null || !config.Is_Active__c) {
+                continue;
+            }
+            Decimal maxAmount = config.Max_Loan_Amount__c;
+            if (maxAmount == null) {
+                continue;
+            }
+            Decimal requested = app.Requested_Amount__c != null ? app.Requested_Amount__c : 0;
+            if (requested > maxAmount) {
+                app.Requested_Amount__c.addError(
+                    'Requested amount ' + requested
+                    + ' exceeds the maximum allowed amount of '
+                    + maxAmount
+                    + ' for loan type ' + app.Loan_Type__c + '.'
+                );
             }
         }
     }
