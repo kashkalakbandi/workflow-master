@@ -4,6 +4,8 @@
  *              Extends fflib_ISObjectDomain to participate in the
  *              fflib Application factory pattern.
  */
+
+ // Adding another comment
 public interface ILoanApplications extends fflib_ISObjectDomain {
     /**
      * @description Validates the credit score on each Loan_Application__c

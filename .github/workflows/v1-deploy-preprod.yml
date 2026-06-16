@@ -1,0 +1,143 @@
+name: v1 | Deploy — Pre-Production
+
+# Triggered when stg is merged into preprod (auto or manual).
+# After a successful deploy, raises a PR from preprod → main.
+# That PR is intentionally left for MANUAL review and merge — no auto-merge.
+
+on:
+  push:
+    branches:
+      - preprod
+    paths:
+      - 'force-app/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-preprod
+  cancel-in-progress: false
+
+jobs:
+  deploy-preprod:
+    name: Deploy to Pre-Production Org
+    runs-on: ubuntu-latest
+    environment:
+      name: preprod
+      # Add required reviewers in Settings → Environments → preprod
+      # This is the human gate before preprod receives code.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Salesforce CLI
+        run: npm install --global @salesforce/cli@latest
+
+      - name: Authenticate to Pre-Production Org
+        run: |
+          echo "${{ secrets.SFDX_PREPROD_AUTH_URL }}" > ./auth-url.txt
+          sf org login sfdx-url --sfdx-url-file ./auth-url.txt --alias preprod-org
+          rm ./auth-url.txt
+
+      - name: Validate metadata (check-only)
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org preprod-org \
+            --dry-run \
+            --wait 20
+
+      - name: Deploy to Pre-Production
+        run: |
+          sf project deploy start \
+            --source-dir force-app \
+            --target-org preprod-org \
+            --wait 30
+
+      - name: Run full test suite on Pre-Production
+        run: |
+          sf apex run test \
+            --target-org preprod-org \
+            --test-level RunLocalTests \
+            --output-dir ./preprod-test-results \
+            --result-format junit \
+            --wait 30
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preprod-test-results
+          path: preprod-test-results/
+          retention-days: 30
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## Pre-Production Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Triggered by | ${{ github.actor }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Raise PR preprod → main (NO auto-merge — manual review required) ────────
+  raise-prod-pr:
+    name: Raise PR — preprod to main
+    runs-on: ubuntu-latest
+    needs: deploy-preprod
+    if: github.event_name == 'push'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create PR from preprod to main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh pr list --base main --head preprod --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING to main already exists — skipping creation."
+          else
+            gh pr create \
+              --base main \
+              --head preprod \
+              --title "release: promote preprod → main (${{ github.sha }})" \
+              --body "$(cat <<'EOF'
+          ## Release PR: preprod → main
+
+          This PR was automatically raised after a successful pre-production deployment.
+
+          **This PR requires manual review and approval. Auto-merge is NOT enabled.**
+
+          ### Pre-production results
+          | Item | Value |
+          |------|-------|
+          | Triggered by | ${{ github.actor }} |
+          | Preprod commit | ${{ github.sha }} |
+          | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+          ### Merge checklist
+          - [ ] Pre-production test results reviewed
+          - [ ] Stakeholder sign-off received
+          - [ ] Change window confirmed
+          - [ ] Rollback plan documented
+          EOF
+            )"
+            echo "Release PR created. Awaiting manual review."
+          fi
