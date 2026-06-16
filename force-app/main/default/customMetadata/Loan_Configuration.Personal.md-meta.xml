@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <label>Personal</label>
+    <protected>false</protected>
+    <values>
+        <field>Loan_Type__c</field>
+        <value xsi:type="xsd:string">Personal</value>
+    </values>
+    <values>
+        <field>Base_Interest_Rate__c</field>
+        <value xsi:type="xsd:double">12.5</value>
+    </values>
+    <values>
+        <field>Max_Loan_Amount__c</field>
+        <value xsi:type="xsd:double">500000</value>
+    </values>
+    <values>
+        <field>Min_Credit_Score__c</field>
+        <value xsi:type="xsd:double">650</value>
+    </values>
+    <values>
+        <field>Max_Tenure_Months__c</field>
+        <value xsi:type="xsd:double">60</value>
+    </values>
+    <values>
+        <field>Is_Active__c</field>
+        <value xsi:type="xsd:boolean">true</value>
+    </values>
+</CustomMetadata>

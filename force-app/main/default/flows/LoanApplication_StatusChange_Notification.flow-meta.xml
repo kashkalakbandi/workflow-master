@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>66.0</apiVersion>
+    <description>Sends an email notification to the applicant when a Loan Application status changes to Approved or Rejected.</description>
+    <environments>Default</environments>
+    <interviewLabel>Loan Application Status Change Notification {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Loan Application - Status Change Notification</label>
+    <processMetadataValues>
+        <name>BuilderType</name>
+        <value>
+            <stringValue>LightningFlowBuilder</stringValue>
+        </value>
+    </processMetadataValues>
+    <processMetadataValues>
+        <name>CanvasMode</name>
+        <value>
+            <stringValue>AUTO_LAYOUT_CANVAS</stringValue>
+        </value>
+    </processMetadataValues>
+    <processType>AutoLaunchedFlow</processType>
+    <start>
+        <locationX>56</locationX>
+        <locationY>0</locationY>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>Status__c</field>
+            <operator>IsChanged</operator>
+            <value>
+                <booleanValue>true</booleanValue>
+            </value>
+        </filters>
+        <object>Loan_Application__c</object>
+        <recordTriggerType>Update</recordTriggerType>
+        <scheduledPaths>
+            <connector>
+                <targetReference>Check_Status_Decision</targetReference>
+            </connector>
+            <pathType>AsyncAfterCommit</pathType>
+        </scheduledPaths>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <decisions>
+        <description>Check whether the new status is Approved or Rejected.</description>
+        <name>Check_Status_Decision</name>
+        <label>Status is Approved or Rejected?</label>
+        <locationX>176</locationX>
+        <locationY>134</locationY>
+        <defaultConnectorLabel>Other Status — Skip</defaultConnectorLabel>
+        <rules>
+            <name>Status_Approved</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>$Record.Status__c</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <stringValue>Approved</stringValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Send_Approval_Email</targetReference>
+            </connector>
+            <label>Approved</label>
+        </rules>
+        <rules>
+            <name>Status_Rejected</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>$Record.Status__c</leftValueReference>
+                <operator>EqualTo</operator>
+                <rightValue>
+                    <stringValue>Rejected</stringValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Send_Rejection_Email</targetReference>
+            </connector>
+            <label>Rejected</label>
+        </rules>
+    </decisions>
+    <actionCalls>
+        <description>Send approval notification email to the applicant.</description>
+        <name>Send_Approval_Email</name>
+        <label>Send Approval Email</label>
+        <locationX>56</locationX>
+        <locationY>278</locationY>
+        <actionName>emailSimple</actionName>
+        <actionType>emailSimple</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>emailAddresses</name>
+            <value>
+                <elementReference>$Record.Applicant__r.Email</elementReference>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>emailSubject</name>
+            <value>
+                <stringValue>Your Loan Application Has Been Approved</stringValue>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>emailBody</name>
+            <value>
+                <stringValue>Dear {!$Record.Applicant__r.FirstName},
+
+Congratulations! Your loan application {!$Record.Name} has been approved for {!$Record.Approved_Amount__c}.
+
+Please contact your relationship manager to proceed with disbursement.
+
+Thank you.</stringValue>
+            </value>
+        </inputParameters>
+    </actionCalls>
+    <actionCalls>
+        <description>Send rejection notification email to the applicant.</description>
+        <name>Send_Rejection_Email</name>
+        <label>Send Rejection Email</label>
+        <locationX>296</locationX>
+        <locationY>278</locationY>
+        <actionName>emailSimple</actionName>
+        <actionType>emailSimple</actionType>
+        <flowTransactionModel>CurrentTransaction</flowTransactionModel>
+        <inputParameters>
+            <name>emailAddresses</name>
+            <value>
+                <elementReference>$Record.Applicant__r.Email</elementReference>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>emailSubject</name>
+            <value>
+                <stringValue>Update on Your Loan Application</stringValue>
+            </value>
+        </inputParameters>
+        <inputParameters>
+            <name>emailBody</name>
+            <value>
+                <stringValue>Dear {!$Record.Applicant__r.FirstName},
+
+We regret to inform you that your loan application {!$Record.Name} could not be approved at this time.
+
+Reason: {!$Record.Rejection_Reason__c}
+
+Please reach out to us if you have any questions.
+
+Thank you.</stringValue>
+            </value>
+        </inputParameters>
+    </actionCalls>
+    <status>Active</status>
+</Flow>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Configuration settings for each loan type — interest rates, maximum amounts, and tenure limits.</description>
+    <label>Loan Configuration</label>
+    <pluralLabel>Loan Configurations</pluralLabel>
+    <visibility>Public</visibility>
+</CustomObject>
