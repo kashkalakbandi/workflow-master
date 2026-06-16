@@ -9,7 +9,7 @@ on:
     branches:
       - stg
     paths:
-      - 'force-app/**'
+      - "force-app/**"
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Download PMD
         run: |
@@ -70,8 +70,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: npm
+          node-version: "20"
 
       - name: Install Salesforce CLI
         run: npm install --global @salesforce/cli@latest
@@ -90,6 +89,13 @@ jobs:
             --duration-days 1 \
             --no-namespace \
             --set-default
+
+      - name: Install fflib dependencies
+        run: |
+          git clone https://github.com/apex-enterprise-patterns/fflib-apex-mocks fflib-apex-mocks
+          git clone https://github.com/apex-enterprise-patterns/fflib-apex-common fflib-apex-common
+          sf project deploy start --source-dir fflib-apex-mocks/sfdx-source --target-org ci-scratch --wait 20
+          sf project deploy start --source-dir fflib-apex-common/sfdx-source --target-org ci-scratch --wait 20
 
       - name: Deploy source
         run: |
